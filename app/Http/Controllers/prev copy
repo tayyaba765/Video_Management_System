@@ -1,0 +1,254 @@
+<?php
+
+namespace App\Http\Controllers;
+
+use App\Models\Video;
+use App\Models\VideoRating;
+use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
+use Illuminate\Support\Facades\Auth;
+use Illuminate\Support\Facades\Log;
+class VideoRatingController extends Controller
+{
+    public const RATINGS = [
+        'hate',
+        'dislike',
+        'dissatisfied',
+        'neutral',
+        'satisfied',
+        'like',
+        'love',
+    ];
+
+    public function index()
+    {
+        return view('video-ratings.index');
+    }
+
+    public function videos(Request $request)
+    {
+        $q = trim((string) $request->query('q', ''));
+        // UPDATED: capture user id once and use it to eager-load their rating
+        $userId = Auth::id();
+        $videos = Video::query()
+            ->when($q !== '', function ($query) use ($q) {
+                $query->where(function ($w) use ($q) {
+                    $w->where('title', 'like', "%{$q}%");
+                });
+            })
+            ->withCount('ratings')
+            ->withAvg('ratings', 'score')
+            ->withCount([
+                'ratings as hate_count' => function ($query) {
+                    $query->where('rating', 'hate');
+                },
+                'ratings as dislike_count' => function ($query) {
+                    $query->where('rating', 'dislike');
+                },
+                'ratings as dissatisfied_count' => function ($query) {
+                    $query->where('rating', 'dissatisfied');
+                },
+                'ratings as neutral_count' => function ($query) {
+                    $query->where('rating', 'neutral');
+                },
+                'ratings as satisfied_count' => function ($query) {
+                    $query->where('rating', 'satisfied');
+                },
+                'ratings as like_count' => function ($query) {
+                    $query->where('rating', 'like');
+                },
+                'ratings as love_count' => function ($query) {
+                    $query->where('rating', 'love');
+                },
+            ])
+            ->latest()
+            ->get()
+            ->map(function (Video $video) {
+                $ratingCounts = [
+                    'hate' => $video->hate_count,
+                    'dislike' => $video->dislike_count,
+                    'dissatisfied' => $video->dissatisfied_count,
+                    'neutral' => $video->neutral_count,
+                    'satisfied' => $video->satisfied_count,
+                    'like' => $video->like_count,
+                    'love' => $video->love_count,
+                ];
+
+                $ratingEmojis = [
+                    'hate' => '😡',
+                    'dislike' => '😞',
+                    'dissatisfied' => '🙁',
+                    'neutral' => '😐',
+                    'satisfied' => '🙂',
+                    'like' => '👍',
+                    'love' => '❤️',
+                ];
+
+                arsort($ratingCounts);
+
+                $topRatings = [];
+
+                foreach ($ratingCounts as $rating => $count) {
+                    if ($count > 0) {
+                        $topRatings[] = [
+                            'rating' => $rating,
+                            'emoji' => $ratingEmojis[$rating],
+                            'count' => $count,
+                        ];
+                    }
+
+                    if (count($topRatings) === 3) {
+                        break;
+                    }
+                }
+
+                return [
+                    'id' => $video->id,
+                    'title' => $video->title,
+                    'genre' => $video->genre ?? null,
+                    'year' => $video->year ?? null,
+                    'poster' => !empty($video->poster)
+                        ? asset('storage/' . $video->poster)
+                        : null,
+                    'ratings_count' => $video->ratings_count,
+                    'avg_score' => $video->ratings_avg_score !== null
+                        ? round($video->ratings_avg_score, 1)
+                        : null,
+                    'top_ratings' => $topRatings,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'data' => $videos,
+        ]);
+    }
+
+    public function ratings(Video $video)
+    {
+        $ratings = $video->ratings()
+            ->with('user')
+            ->latest()
+            ->get()
+            ->map(function (VideoRating $rating) {
+                return [
+                    'id' => $rating->id,
+                    'video_id' => $rating->video_id,
+                    'user_id' => $rating->user_id,
+                    'user' => $rating->user
+                        ? [
+                            'id' => $rating->user->id,
+                            'name' => $rating->user->name,
+                        ]
+                        : null,
+                    'rating' => $rating->rating,
+                    'score' => $rating->score,
+                    'review' => $rating->review,
+                    'created_at' => $rating->created_at,
+                ];
+            });
+
+        return response()->json([
+            'success' => true,
+            'video' => [
+                'id' => $video->id,
+                'title' => $video->title,
+            ],
+            'ratings' => $ratings,
+        ]);
+    }
+
+    public function store(Request $request)
+    {
+        $data = $request->validate([
+            'video_id' => [
+                'required',
+                'exists:videos,id',
+            ],
+            'rating' => [
+                'required',
+                Rule::in(self::RATINGS),
+            ],
+            'score' => [
+                'required',
+                'integer',
+                'between:1,10',
+            ],
+            'review' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
+        ]);
+  Log::info('STORE received', [
+        'all'        => $request->all(),   // everything posted
+        'validated'  => $data,             // what validation kept
+        'user_id'    => Auth::id(),
+    ]);
+        $data['user_id'] = Auth::id();
+
+        $rating = VideoRating::create($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rating saved successfully!',
+            'data' => $rating->load('user'),
+        ], 201);
+    }
+
+    public function update(Request $request, VideoRating $rating)
+    {
+        if ($rating->user_id !== Auth::id()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You can only update your own rating.'
+            ], 403);
+        }
+ 
+        $data = $request->validate([
+            'rating' => [
+                'required',
+                Rule::in(self::RATINGS),
+            ],
+            'score' => [
+                'required',
+                'integer',
+                'between:1,10',
+            ],
+            'review' => [
+                'nullable',
+                'string',
+                'max:2000',
+            ],
+        ]);
+ Log::info(' EEUPDATE received', [
+        'all'        => $request->all(),   // everything posted
+        'validated'  => $data,             // what validation kept
+        'user_id'    => Auth::id(),
+    ]);
+        $rating->update($data);
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rating updated successfully!',
+            'data' => $rating->fresh()->load('user'),
+        ]);
+    }
+
+    public function destroy(VideoRating $rating)
+    {
+        if ($rating->user_id !== Auth::id()) {
+            return response()->json([
+                'success' => false,
+                'message' => 'You can only delete your own rating.'
+            ], 403);
+        }
+
+        $rating->delete();
+
+        return response()->json([
+            'success' => true,
+            'message' => 'Rating deleted successfully!',
+        ]);
+    }
+}
