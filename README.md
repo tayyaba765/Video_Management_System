@@ -40,6 +40,9 @@ for pivot tables
 /api/v1/videos/{id}/users
 /api/v1/videos/{id}/video-ratings
 /api/v1/videos/{id}/relationships/video-ratings
+/api/v1/users/{id}
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/ce8ebe65-1b52-48bf-bcc2-ab385158e05f" />
+<img width="1920" height="1080" alt="image" src="https://github.com/user-attachments/assets/919ac3de-64a6-4c74-abe1-d3d37d75213c" />
 
 
 
